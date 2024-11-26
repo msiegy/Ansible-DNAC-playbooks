@@ -1,0 +1,11 @@
+dnac:
+  hosts:
+    dnac_host:
+      ansible_host: 10.10.20.85  # IP address of your DNAC instance
+      ansible_user: admin         # Cisco DNA Center username (used for basic auth)
+      ansible_password: Cisco1234!  # Cisco DNA Center password (used for basic auth)
+      connection: local
+  vars:
+    dnac_site_id: "395213d7-f2a5-40ae-aca6-149b1fd62a86"  # Example site ID
+    dnac_template_id: "aa46c2f5-ce5e-44a8-8086-6a8b0ab0b615"  # Template ID
+    dnac_base_url: "https://{{ ansible_host }}/dna"  # Base URL for Cisco DNA Center API
