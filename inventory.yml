@@ -1,0 +1,14 @@
+all:
+  vars:
+    dnac_host: 10.10.20.85
+    dnac_username: admin
+    dnac_password: Cisco1234!
+    dnac_verify: no
+    dnac_port: 443
+    dnac_site_id: "395213d7-f2a5-40ae-aca6-149b1fd62a86"  # Example site ID
+    dnac_template_id: "aa46c2f5-ce5e-44a8-8086-6a8b0ab0b615"  # Template ID
+  hosts:
+    dnac_host:
+      ansible_host: 10.10.20.85
+      ansible_user: admin
+      ansible_password: Cisco1234!
