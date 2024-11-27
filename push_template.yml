@@ -1,110 +1,35 @@
 ---
-- name: Push template to devices for a given Site using Cisco DNA Center
-  hosts: dnac
+- name: Push template to devices in a Site using Cisco DNA Center
+  hosts: dnac_host
   connection: local
   gather_facts: no
   vars:
-    dnac_base_url: "https://{{ ansible_host }}/dna"
-    poll_timeout: 180  # 3 minutes
-    poll_interval: 10  # Check every 10 seconds
+    dnac_conn: &dnac_conn
+      dnac_host: "{{ dnac_host }}"
+      dnac_username: "{{ dnac_username }}"
+      dnac_password: "{{ dnac_password }}"
+      dnac_verify: "{{ dnac_verify }}"
+      dnac_port: "{{ dnac_port }}"
+
   tasks:
-    - name: Obtain Auth Token from Cisco DNA Center
-      uri:
-        url: "{{ dnac_base_url }}/system/api/v1/auth/token"
-        method: POST
-        headers:
-          Content-Type: application/json
-        user: "{{ ansible_user }}"
-        password: "{{ ansible_password }}"
-        force_basic_auth: yes
-        validate_certs: no
-      register: auth_response
-      no_log: true
-
-    - name: Extract Token
-      set_fact:
-        dnac_token: "{{ auth_response.json.Token }}"
-
+    # Get the list of devices for the specified site
     - name: Get devices for the specified site
-      uri:
-        url: "{{ dnac_base_url }}/intent/api/v1/membership/{{ dnac_site_id }}"
-        method: GET
-        headers:
-          Content-Type: application/json
-          X-Auth-Token: "{{ dnac_token }}"
-        validate_certs: no
+      cisco.dnac.site_membership_info:
+        <<: *dnac_conn
+        siteId: "{{ dnac_site_id }}"
       register: membership_response
 
-    #- name: Debug membership response
-    #  debug:
-    #    var: membership_response
-
+    # Extract device IDs from the membership response
     - name: Extract device IDs
       set_fact:
-        device_ids: "{{ membership_response.json.device | selectattr('response', 'defined') | map(attribute='response') | flatten | map(attribute='instanceUuid') | list }}"
+        device_ids: "{{ membership_response.dnac_response.device[0].response | map(attribute='instanceUuid') | list }}"
 
-    #- name: Debug extracted device IDs
-    #  debug:
-    #    var: device_ids
-
-    #push templates to all devices for the given site id. expect 202 response as DNAC will create tasks.
+    # Push the template to each device
     - name: Push template to devices
-      uri:
-        url: "{{ dnac_base_url }}/intent/api/v2/template-programmer/template/deploy"
-        method: POST
-        headers:
-          Content-Type: application/json
-          X-Auth-Token: "{{ dnac_token }}"
-        body:
-          forcePushTemplate: false
-          targetInfo:
-            - id: "{{ item }}"
-              type: "MANAGED_DEVICE_UUID"
-              versionedTemplateId: "{{ dnac_template_id }}"
-          templateId: "{{ dnac_template_id }}"
-        body_format: json
-        validate_certs: no
+      cisco.dnac.configuration_template_deploy:
+        <<: *dnac_conn
+        templateId: "{{ dnac_template_id }}"
+        targetInfo:
+          - id: "{{ item }}"
+            type: "MANAGED_DEVICE_UUID"
       with_items: "{{ device_ids }}"
-      register: push_template_response
-      ignore_errors: yes  #ignore errors as we are expecting 202 response.
-
-    #set task ids for each device. we will use these task ids to check the status of the tasks and report at the end.
-    - name: Set task IDs
-      set_fact:
-        task_mapping: "{{ task_mapping | default({}) | combine({item.json.response.taskId: item.item}) }}"
-      with_items: "{{ push_template_response.results }}"
-      when: item.status == 202
-      no_log: true
-
-    - name: Check task status
-      uri:
-        url: "{{ dnac_base_url }}/intent/api/v1/task/{{ item }}"
-        method: GET
-        headers:
-          X-Auth-Token: "{{ dnac_token }}"
-        validate_certs: no
-      register: task_status
-      until: task_status.json.response.isError == false or task_status.json.response.progress == 'COMPLETED'
-      retries: "{{ poll_timeout // poll_interval }}"
-      delay: "{{ poll_interval }}"
-      with_items: "{{ task_mapping.keys() }}"
-
-    - name: Collect task results
-      set_fact:
-        task_results: "{{ task_results | default([]) + [{'task_id': item.item, 'device_id': task_mapping[item.item], 'status': 'Success'}] }}"
-      when: item.json.response.isError == false
-      with_items: "{{ task_status.results }}"
-      no_log: true
-
-    - name: Collect task failures
-      set_fact:
-        task_results: "{{ task_results | default([]) + [{'task_id': item.item, 'device_id': task_mapping[item.item], 'status': 'Failed'}] }}"
-      when: item.json.response.isError == true
-      with_items: "{{ task_status.results }}"
-      no_log: true
-
-    #simplified summary of task results from the above collection tasks.
-    - name: Report task results
-      debug:
-        msg: "Task ID: {{ item.task_id }} - Device ID: {{ item.device_id }} - Status: {{ item.status }}"
-      with_items: "{{ task_results }}"
