@@ -1,0 +1,137 @@
+---
+- name: Push template to devices in a Site using Cisco DNA Center
+  hosts: dnac_host
+  connection: local
+  gather_facts: no
+  vars:
+    dnac_conn: &dnac_conn
+      dnac_host: "{{ dnac_host }}"
+      dnac_username: "{{ dnac_username }}"
+      dnac_password: "{{ dnac_password }}"
+      dnac_verify: "{{ dnac_verify }}"
+      dnac_port: "{{ dnac_port }}"
+
+  tasks:
+    # Get the list of devices for the specified site
+    - name: Get devices for the specified site
+      cisco.dnac.site_membership_info:
+        <<: *dnac_conn
+        siteId: "{{ dnac_site_id }}"
+      register: membership_response
+
+    # Extract device IDs from the membership response, used for get version, since module was not working.
+    - name: Extract device IDs
+      set_fact:
+        device_ids: "{{ membership_response.dnac_response.device[0].response | map(attribute='instanceUuid') | list }}"
+        
+    - name: Obtain Auth Token from Cisco DNA Center
+      uri:
+        url: "{{ dnac_base_url }}/system/api/v1/auth/token"
+        method: POST
+        headers:
+          Content-Type: application/json
+        user: "{{ dnac_username }}"
+        password: "{{ dnac_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+      register: auth_response
+      no_log: false
+
+    - name: Extract Token
+      set_fact:
+        dnac_token: "{{ auth_response.json.Token }}"
+
+    # Get the latest version ID for Sub Template #1
+    - name: Get version info for Sub Template #1
+      uri:
+        url: "https://{{ dnac_host }}/dna/intent/api/v1/template-programmer/template/version/{{ dnac_template1_primary_id }}"
+        method: GET
+        headers:
+          Content-Type: "application/json"
+          X-Auth-Token: "{{ dnac_token }}"
+        validate_certs: no
+      register: sub_template_1_version_response
+    
+    # Debug version response
+    - name: Debug version response
+      debug:
+        var: sub_template_1_version_response
+
+    - name: Set latest version ID for Sub Template #1
+      set_fact:
+        sub_template_1_version_id: "{{ (sub_template_1_version_response.json[0].versionsInfo | sort(attribute='versionTime') | last).id }}"
+
+    # Get the latest version ID for Sub Template #2
+    - name: Get version info for Sub Template #2
+      uri:
+        url: "https://{{ dnac_host }}/dna/intent/api/v1/template-programmer/template/version/{{ dnac_template2_primary_id }}"
+        method: GET
+        headers:
+          Content-Type: "application/json"
+          X-Auth-Token: "{{ dnac_token }}"
+        validate_certs: no
+      register: sub_template_2_version_response
+
+    # Debug version response
+    - name: Debug version response
+      debug:
+        var: sub_template_2_version_response
+
+    - name: Set latest version ID for Sub Template #2
+      set_fact:
+        sub_template_2_version_id: "{{ (sub_template_2_version_response.json[0].versionsInfo | sort(attribute='versionTime') | last).id }}"
+
+    # Debug devices response
+    - name: Debug devices response
+      debug:
+        var: device_ids
+
+    # Push the template to each device
+    - name: Push composite template to devices
+      cisco.dnac.configuration_template_deploy_v2:
+        <<: *dnac_conn
+        templateId: "{{ dnac_composite_template_version_id }}"  # Composite Version ID
+        forcePushTemplate: true
+        isComposite: true
+        mainTemplateId: "{{ dnac_composite_template_primary_id }}"  # Composite Primary ID
+        targetInfo:
+          - id: "{{ item }}"
+            type: "MANAGED_DEVICE_UUID"
+            params: {}
+            resourceParams: []
+        memberTemplateDeploymentInfo:
+          - templateId: "{{ sub_template_1_version_id }}"  # Sub Template #1 Latest Version ID
+            mainTemplateId: "{{ dnac_template1_primary_id }}"  # Sub Template #1 Primary ID
+            targetInfo:
+              - id: "{{ item }}"
+                type: "MANAGED_DEVICE_UUID"
+                params: {}
+                resourceParams: []
+            forcePushTemplate: true
+            isComposite: false
+          - templateId: "{{ sub_template_2_version_id }}"  # Sub Template #2 Latest Version ID
+            mainTemplateId: "{{ dnac_template2_primary_id }}"  # Sub Template #2 Primary ID
+            targetInfo:
+              - id: "{{ item }}"
+                type: "MANAGED_DEVICE_UUID"
+                params: {}
+                resourceParams: []
+            forcePushTemplate: true
+            isComposite: false
+      loop: "{{ device_ids }}"
+      register: deploy_result
+
+    # Output the task IDs
+    - name: Output task IDs
+      debug:
+        msg: "Task ID: {{ item.dnac_response.response.taskId }}"
+      loop: "{{ deploy_result.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    # Sync all devices
+    - name: Sync all devices found in the site
+      cisco.dnac.network_device_sync:
+        <<: *dnac_conn
+        forceSync: true
+        payload: "{{ device_ids }}"
